@@ -50,17 +50,17 @@ def interpolate(volume,vec_cart):
     for i in range(num):
         p = vec_cart[:,i]
         # suppose there is no out-of-boundary problem
-        neighbors = np.int(np.array([[np.floor(p[0]),np.floor(p[1]),np.floor(p[2])],
+        neighbors = np.array([[np.floor(p[0]),np.floor(p[1]),np.floor(p[2])],
                               [np.floor(p[0]),np.ceil(p[1]),np.floor(p[2])],
                               [np.floor(p[0]),np.floor(p[1]),np.ceil(p[2])],
                               [np.floor(p[0]),np.ceil(p[1]),np.ceil(p[2])],
                               [np.ceil(p[0]),np.floor(p[1]),np.floor(p[2])],
                               [np.ceil(p[0]),np.ceil(p[1]),np.floor(p[2])],
                               [np.ceil(p[0]),np.floor(p[1]),np.ceil(p[2])],
-                              [np.ceil(p[0]),np.ceil(p[1]),np.ceil(p[2])]]))
+                              [np.ceil(p[0]),np.ceil(p[1]),np.ceil(p[2])]]).astype(int)
         values = np.zeros([8,],dtype=np.float32)    
         for j in range(8):
-            values[j] = volume(neighbors[j,:])
+            values[j] = volume[neighbors[j,0],neighbors[j,1],neighbors[j,2]]
         opt[i] = griddata(neighbors,values,p,method='linear')
     return opt
 
@@ -93,7 +93,7 @@ def cylinder_sample(vec_sphere,center,num_sample):
     sample_class = []
     
     # h samples along each dir which defines the center of the plane
-    for j in range(h):
+    for j in range(-r,h):
         norm = sphere2cart(vec_sphere)
         n = (np.float(norm[0,0]),np.float(norm[1,0]),np.float(norm[2,0]))
         # sample on the plane that include (0,0,0) and shift by p
@@ -119,16 +119,54 @@ def Get_M(sample_points,sample_class,volume):
             idx = np.concatenate((idx,sample_points[i]),axis=1)
             cla = np.concatenate((cla,sample_class[i]))
     # interpolate
-    intensity = interpolate(volume,idx)
-    mu_out = np.multiply(intensity,np.array([cla]).T)/np.sum(cla)
-    mu_in = np.multiply(intensity,np.array([1-cla]).T)/np.sum(1-cla)
+    dim = len(cla)
+    cla = cla.reshape([dim,1])
+    intensity = interpolate(volume,idx).reshape([dim,1])
+    mu_out = np.sum(np.multiply(intensity,cla))/np.sum(cla)
+    mu_in = np.sum(np.multiply(intensity,1-cla))/np.sum(1-cla)
     
     return np.square(mu_in-mu_out)
+
+def H_matrix(orients):
+    '''
+    takes the orients(cartesian) with shape [3,vec_num]
+    '''
+    _,num = orients.shape
+    H = np.zeros([num,6],dtype=np.float32)
+    for i in range(num):
+        H[i,:] = np.array([orients[0,i]**2,orients[1,i]**2,orients[2,i]**2,
+                          2*orients[0,i]*orients[1,i],2*orients[0,i]*orients[2,i],
+                          2*orients[1,i]*orients[2,i]],dtype=np.float32)
+    return H
+
+def GetTensor(volume,vec_num,layer_sample_num,center):
+    '''
+    for voxel [center], collect data from [vec_num] of directions
+    orients: orientation in cartesian 
+    m_values: correspoinding m value
+    '''
+    orients = np.zeros([3,vec_num],dtype=np.float32)
+    m_values = np.zeros([1,vec_num],dtype=np.float32)
+    ori_sphere = sample_vec(vec_num) #[3,vec_num]
+    
+    for i in range(vec_num):
+        vec_sphere = (ori_sphere[:,i]).reshape([3,1])
+        orients[:,i] = sphere2cart(vec_sphere).reshape([3,])
+        sp, sc = cylinder_sample(vec_sphere,center,layer_sample_num)
+        m_values[:,i] = Get_M(sp,sc,volume)
+        
+        H = H_matrix(orients) 
+        d_vec = np.matmul(np.linalg.pinv(H),m_values.T)
+        d_tensor = np.array([[d_vec[0,0],d_vec[3,0],d_vec[4,0]],
+                         [d_vec[3,0],d_vec[1,0],d_vec[5,0]],
+                         [d_vec[4,0],d_vec[5,0],d_vec[2,0]]],dtype=np.float32)
+    return d_tensor
+    
     
 #%% Function Test
-vec_sphere = sample_vec(1)
-center = np.array([[0,0,0]]).T
-sp,sc = cylinder_sample(vec_sphere,center,200)
+#vec_sphere = sample_vec(1)
+#center = np.array([[0,0,0]]).T
+#sp,sc = cylinder_sample(vec_sphere,center,200)
 #orient = sphere2cart(vec_sphere)
 #
 #from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
@@ -146,7 +184,7 @@ sp,sc = cylinder_sample(vec_sphere,center,200)
 #    
 #    cl = sc[i]
 #    for j in range(len(cl)):
-#        if cl[j] == 1:
+#        if cl[j] == 0:
 #            ms.append('x')    
 #        else:
 #            ms.append('o')
@@ -171,21 +209,15 @@ sp,sc = cylinder_sample(vec_sphere,center,200)
 #    ax.set_zlabel('Z Label')
 #plt.show()
 
+
 #%%
+root = 'E:\\OCTA\\eval\\'
+volume = util.nii_loader(root+'seg_roi.nii.gz')
 
-for i in range(len(sp)):
-    if i == 0:
-        idx = sp[i]
-        cla = sc[i]
-    else:
-        idx = np.concatenate((idx,sp[i]),axis=1)
-        cla = np.concatenate((cla,sc[i]))
+vec_num = 30
+layer_sample_num = 10
+center = np.array([[64,10,69]],dtype=np.float32).T 
+
+d_tensor = GetTensor(volume,vec_num,layer_sample_num,center)
     
-
-
-
-
-
-
-
 
